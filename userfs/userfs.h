@@ -1,11 +1,25 @@
-#include <stdlib.h>
-#include <stdio.h>
+#include <sys/types.h>
 
 /**
  * User-defined in-memory filesystem. It is as simple as possible.
  * Each file lies in the memory as an array of blocks. A file
  * has an unique file name, and there are no directories, so the
- * FS is a monolite flat contiguous folder.
+ * FS is a monolithic flat contiguous folder.
+ */
+
+/**
+ * Here you should specify which features do you want to implement
+ * via macros: NEED_OPEN_FLAGS and NEED_RESIZE. If you want to
+ * allow advanced flags, do this here:
+ *
+ *     #define NEED_OPEN_FLAGS
+ *
+ * To allow resize() functions define this:
+ *
+ *     #define NEED_RESIZE
+ *
+ * It is important to define these macros here, in the header,
+ * because it is used by tests.
  */
 
 /**
@@ -17,12 +31,25 @@ enum open_flags {
 	 * create it.
 	 */
 	UFS_CREATE = 1,
-	/* Open file both to read and to write */
-	UFS_READ_WRITE = 0,
-	/* Open file only to read */
+
+#ifdef NEED_OPEN_FLAGS
+
+	/**
+	 * With this flag it is allowed to only read the file.
+	 */
 	UFS_READ_ONLY = 2,
-	/* Open file only to write */
+	/**
+	 * With this flag it is allowed to only write into the
+	 * file.
+	 */
 	UFS_WRITE_ONLY = 4,
+	/**
+	 * With this flag it is allowed to both read and write
+	 * into the file.
+	 */
+	UFS_READ_WRITE = 8,
+
+#endif
 };
 
 /** Possible errors from all functions. */
@@ -30,12 +57,17 @@ enum ufs_error_code {
 	UFS_ERR_NO_ERR = 0,
 	UFS_ERR_NO_FILE,
 	UFS_ERR_NO_MEM,
+	UFS_ERR_NOT_IMPLEMENTED,
+
+#ifdef NEED_OPEN_FLAGS
+
 	UFS_ERR_NO_PERMISSION,
+#endif
 };
 
 /** Get code of the last error. */
 enum ufs_error_code
-get_ufs_errno();
+ufs_errno();
 
 /**
  * Open a file by filename.
@@ -43,7 +75,7 @@ get_ufs_errno();
  * @param flags Bitwise combination of open_flags.
  *
  * @retval > 0 File descriptor.
- * @retval -1 Error occured. Check ufs_errno() for a code.
+ * @retval -1 Error occurred. Check ufs_errno() for a code.
  *     - UFS_ERR_NO_FILE - no such file, and UFS_CREATE flag is
  *       not specified.
  */
@@ -57,12 +89,11 @@ ufs_open(const char *filename, int flags);
  * @param size Size of @a buf.
  *
  * @retval > 0 How many bytes were written.
- * @retval -1 Error occured. Check ufs_errno() for a code.
+ * @retval -1 Error occurred. Check ufs_errno() for a code.
  *     - UFS_ERR_NO_FILE - invalid file descriptor.
  *     - UFS_ERR_NO_MEM - not enough memory.
- *     - UFS_ERR_NO_PERMISSION - no permission to write.
  */
-int
+ssize_t
 ufs_write(int fd, const char *buf, size_t size);
 
 /**
@@ -73,18 +104,17 @@ ufs_write(int fd, const char *buf, size_t size);
  *
  * @retval > 0 How many bytes were read.
  * @retval 0 EOF.
- * @retval -1 Error occured. Check ufs_errno() for a code.
+ * @retval -1 Error occurred. Check ufs_errno() for a code.
  *     - UFS_ERR_NO_FILE - invalid file descriptor.
- *     - UFS_ERR_NO_PERMISSION - no permission to read.
  */
-int
+ssize_t
 ufs_read(int fd, char *buf, size_t size);
 
 /**
  * Close a file.
  * @param fd File descriptor from ufs_open().
  * @retval 0 Success.
- * @retval -1 Error occured. Check ufs_errno() for a code.
+ * @retval -1 Error occurred. Check ufs_errno() for a code.
  *     - UFS_ERR_NO_FILE - invalid file descriptor.
  */
 int
@@ -99,19 +129,31 @@ ufs_close(int fd);
  * descriptors of the deleted file.
  *
  * @param filename Name of a file to delete.
- * @retval -1 Error occured. Check ufs_errno() for a code.
+ * @retval -1 Error occurred. Check ufs_errno() for a code.
  *     - UFS_ERR_NO_FILE - no such file.
  */
 int
 ufs_delete(const char *filename);
 
+#ifdef NEED_RESIZE
+
 /**
- * Increase or decrease file size.
- * @param fd File descriptor from ufs_open()
- * @param new_size New file size
+ * Resize a file opened by the file descriptor @a fd. If current
+ * file size is less than @a new_size, then new empty blocks are
+ * created and positions of opened file descriptors are not
+ * changed. If the current size is bigger than @a new_size, then
+ * the blocks are truncated. Opened file descriptors behind the
+ * new file size should proceed from the new file end.
+ *
+ * @param fd File descriptor from ufs_open().
+ * @param new_size New file size.
  * @retval 0 Success.
- *         -1 Error occured. Check ufs_errno() for a code.
- *     - UFS_ERR_NO_FILE - no such file.
+ * @retval -1 Error occurred.
+ *     - UFS_ERR_NO_FILE - invalid file descriptor.
+ *     - UFS_ERR_NO_MEM - not enough memory. Can appear only when
+ *       @a new_size is bigger than the current size.
  */
 int
 ufs_resize(int fd, size_t new_size);
+
+#endif
