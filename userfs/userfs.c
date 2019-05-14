@@ -67,7 +67,7 @@ struct filedesc {
  */
 static struct filedesc **file_descriptors = NULL;
 static int file_descriptor_count = 0;
-static int file_descriptor_capacity = 0;
+static int file_descriptor_capacity = 2000;
 
 enum ufs_error_code
 ufs_errno()
