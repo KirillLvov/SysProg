@@ -1,5 +1,7 @@
 #include "userfs.h"
 #include <stddef.h>
+#include <stdlib.h>
+#include <stdio.h>
 
 enum {
 	BLOCK_SIZE = 512,
@@ -77,7 +79,7 @@ ufs_open(const char *filename, int flags)
 {
 	/* Return error if there are too many file descriptors */
 	if(file_descriptor_count == file_descriptor_capacity) {
-		ufs_errno = UFS_ERR_NO_FILE;
+		ufs_error_code = UFS_ERR_NO_FILE;
 		return -1;
 	}
 	struct filedesc *new_filedesc = (struct filedesc *)malloc(sizeof(struct filedesc));
@@ -93,7 +95,7 @@ ufs_open(const char *filename, int flags)
 		probe = probe->next;
 		if(strcmp(probe->name, filename) == 0) {
 			new_filedesc->file = probe;
-			new_filedesc->block_to_read = probe->block_list;
+			new_filedesc->block_to_act = probe->block_list;
 			new_filedesc->pos = 0;
 			probe->refs ++;
 			file_ok = 1;
@@ -103,7 +105,7 @@ ufs_open(const char *filename, int flags)
 	/* Create new file */
 	if(!file_ok) {
 		if(!(flags & UFS_CREATE)) {
-			ufs_errno = UFS_ERR_NO_FILE;
+			ufs_error_code = UFS_ERR_NO_FILE;
 			return -1;
 		}
 		else {
@@ -114,7 +116,8 @@ ufs_open(const char *filename, int flags)
 			new_file->block_list->prev = NULL;
 			new_file->block_list->occupied = 0;
 			new_file->last_block = new_file->block_list;
-			new_file->name = filename;
+			new_file->name = (const char *)malloc(sizeof(char)*strlen(filename));
+			strcpy((char*)new_file->name, filename);
 			new_file->next = NULL;
 			new_file->refs = 1;
 			new_file->occupied = 0;
@@ -127,7 +130,7 @@ ufs_open(const char *filename, int flags)
 				file_list = new_file;
 			}
 			new_filedesc->file = new_file;
-			new_filedesc->block_to_read = new_file->block_list;
+			new_filedesc->block_to_act = new_file->block_list;
 			new_filedesc->pos = 0;
 		}
 	}
@@ -146,39 +149,80 @@ ufs_write(int fd, const char *buf, size_t size)
 {
 	/* Check whether a file descriptor #fd exists */
 	if(fd < 0 || fd > file_descriptor_capacity - 1 || file_descriptors[fd] == NULL) {
-		ufs_errno = UFS_ERR_NO_FILE;
+		ufs_error_code = UFS_ERR_NO_FILE;
 		return -1;
 	}
 	/* Check permissions of the work */
 	if(file_descriptors[fd]->regime & UFS_READ_ONLY) {
-		ufs_errno = UFS_ERR_NO_PERMISSION;
+		ufs_error_code = UFS_ERR_NO_PERMISSION;
 		return -1;
 	}
 	/* Extract file from file descriptor */
 	struct file *file_to_write = file_descriptors[fd]->file;
 	/* Check whether the file is short enought to write 'buf' */
-	if(MAX_FILE_SIZE - file_to_write->occupied < size) {
-		ufs_errno = UFS_ERR_NO_MEM;
+	if(MAX_FILE_SIZE - file_descriptors[fd]->pos < size) {
+		ufs_error_code = UFS_ERR_NO_MEM;
 		return -1;
 	}
 	/* The number of bytes left to write */
 	int left_to_write = size;
 	/* Choose the last block in the file */
-	struct block *cur_block = file_to_write->last_block;
+	struct block *cur_block = file_descriptors[fd]->block_to_act;
 	if(cur_block->memory == NULL)
 		cur_block->memory = (char *)malloc(sizeof(char)*BLOCK_SIZE);
 	/* Write the 'buf' totally if there is enought memory in the last block */
-	if(BLOCK_SIZE - cur_block->occupied >= left_to_write) {
-		sprintf(cur_block->memory + cur_block->occupied, "%s", buf);
-		cur_block->occupied += left_to_write;
+	int offset = file_descriptors[fd]->pos % BLOCK_SIZE;
+	if(BLOCK_SIZE - offset >= left_to_write) {
+		sprintf(cur_block->memory + offset, "%s", buf);
+		if(cur_block->occupied < offset + left_to_write) {
+			file_to_write->occupied += offset + left_to_write - cur_block->occupied;
+			cur_block->occupied = offset + left_to_write;
+		}
+		/* Create new block if previous one is full */
+		if(BLOCK_SIZE - offset == left_to_write) {
+			struct block *new_block = (struct block *)malloc(sizeof(struct block));
+			new_block->memory = (char *)malloc(sizeof(char)*BLOCK_SIZE);
+			new_block->occupied = 0;
+			new_block->next = NULL;
+			new_block->prev = cur_block;
+			cur_block->next = new_block;
+			cur_block = new_block;
+			file_to_write->last_block = cur_block;
+		}
 		left_to_write = 0;
+		file_descriptors[fd]->block_to_act = cur_block;
+		file_descriptors[fd]->pos += size;
+		return size;
 	}
 	else {
-		/* Write to the last block until it becomes full */
-		sprintf(cur_block->memory + cur_block->occupied, "%.*s", BLOCK_SIZE - cur_block->occupied, buf + size - left_to_write);
-		left_to_write -= BLOCK_SIZE - cur_block->occupied;
-		cur_block->occupied = BLOCK_SIZE;
-		/* Create new block and write 'buf' to them totally*/
+		/* Write to the current block until it becomes full */
+		sprintf(cur_block->memory + offset, "%.*s", BLOCK_SIZE - offset, buf + size - left_to_write);
+		left_to_write -= BLOCK_SIZE - offset;
+		if(cur_block->occupied < BLOCK_SIZE) {
+			file_to_write->occupied += BLOCK_SIZE - cur_block->occupied;
+			cur_block->occupied = BLOCK_SIZE;
+		}
+		/* Rewrite following blocks */
+		while(cur_block->next != NULL) {
+			cur_block = cur_block->next;
+			if(left_to_write <= BLOCK_SIZE) {
+				sprintf(cur_block->memory, "%.*s", left_to_write, buf + size - left_to_write);
+				if(cur_block->occupied < left_to_write) {
+					file_to_write->occupied += left_to_write - cur_block->occupied;
+					cur_block->occupied = left_to_write;
+				}
+				file_descriptors[fd]->block_to_act = cur_block;
+				file_descriptors[fd]->pos += size;
+				return size;
+			}
+			sprintf(cur_block->memory, "%.*s", BLOCK_SIZE, buf + size - left_to_write);
+			left_to_write -= BLOCK_SIZE;
+			if(cur_block->occupied < BLOCK_SIZE) {
+				file_to_write->occupied += BLOCK_SIZE - cur_block->occupied;
+				cur_block->occupied = BLOCK_SIZE;
+			}
+		}
+		/* Create new block and write 'buf' to them totally */
 		while(left_to_write >= BLOCK_SIZE) {
 			struct block *new_block = (struct block *)malloc(sizeof(struct block));
 			new_block->memory = (char *)malloc(sizeof(char)*BLOCK_SIZE);
@@ -189,23 +233,27 @@ ufs_write(int fd, const char *buf, size_t size)
 			cur_block->next = new_block;
 			cur_block = new_block;
 			left_to_write -= BLOCK_SIZE;
+			file_to_write->last_block = cur_block;
+			file_to_write->occupied += BLOCK_SIZE;
 		}
 		/* Create new block and write last data to it partially */
-		struct block *new_block = (struct block *)malloc(sizeof(struct block));
-		new_block->memory = (char *)malloc(sizeof(char)*BLOCK_SIZE);
-		sprintf(new_block->memory, "%.*s", left_to_write, buf + size - left_to_write);
-		new_block->occupied = left_to_write;
-		new_block->next = NULL;
-		new_block->prev = cur_block;
-		cur_block->next = new_block;
-		cur_block = new_block;
-		left_to_write = 0;
+		if(left_to_write >= 0) {
+			struct block *new_block = (struct block *)malloc(sizeof(struct block));
+			new_block->memory = (char *)malloc(sizeof(char)*BLOCK_SIZE);
+			sprintf(new_block->memory, "%.*s", left_to_write, buf + size - left_to_write);
+			new_block->occupied = left_to_write;
+			new_block->next = NULL;
+			new_block->prev = cur_block;
+			cur_block->next = new_block;
+			cur_block = new_block;
+			file_to_write->last_block = cur_block;
+			file_to_write->occupied += left_to_write;
+			left_to_write = 0;
+		}
+		file_descriptors[fd]->block_to_act = cur_block;
+		file_descriptors[fd]->pos += size;
+		return size;
 	}
-	file_to_write->last_block = cur_block;
-	file_to_write->occupied += size;
-	file_descriptors[fd]->block_to_read = cur_block;
-	file_descriptors[fd]->pos = file_to_write->occupied;
-	return size;
 }
 
 ssize_t
@@ -213,12 +261,12 @@ ufs_read(int fd, char *buf, size_t size)
 {
 	/* Check whether a file descriptor #fd exists */
 	if(fd < 0 || fd > file_descriptor_capacity - 1 || file_descriptors[fd] == NULL) {
-		ufs_errno = UFS_ERR_NO_FILE;
+		ufs_error_code = UFS_ERR_NO_FILE;
 		return -1;
 	}
 	/* Check permissions of the work */
 	if(file_descriptors[fd]->regime & UFS_WRITE_ONLY) {
-		ufs_errno = UFS_ERR_NO_PERMISSION;
+		ufs_error_code = UFS_ERR_NO_PERMISSION;
 		return -1;
 	}
 	/* The number of bytes left to read */
@@ -229,7 +277,7 @@ ufs_read(int fd, char *buf, size_t size)
 	else
 		left_to_read = size;
 	/* Choose the block to read */
-	struct block *cur_block = file_descriptors[fd]->block_to_read;
+	struct block *cur_block = file_descriptors[fd]->block_to_act;
 	int offset = file_descriptors[fd]->pos % BLOCK_SIZE;
 	/* Check whether the file is not empty */
 	if(cur_block->memory == NULL)
@@ -259,12 +307,15 @@ ufs_read(int fd, char *buf, size_t size)
 			cur_block = cur_block->next;
 		}
 	}
-	file_descriptors[fd]->block_to_read = cur_block;
-	file_descriptors[fd]->pos += size;
-	if(available_to_read < size)
+	file_descriptors[fd]->block_to_act = cur_block;
+	if(available_to_read < size) {
+		file_descriptors[fd]->pos += available_to_read;
 		return available_to_read;
-	else
+	}
+	else {
+		file_descriptors[fd]->pos += size;
 		return size;
+	}
 }
 
 int
@@ -272,7 +323,7 @@ ufs_close(int fd)
 {
 	/* Check whether a file descriptor #fd exists */
 	if(fd < 0 || fd > file_descriptor_capacity - 1 || file_descriptors[fd] == NULL) {
-		ufs_errno = UFS_ERR_NO_FILE;
+		ufs_error_code = UFS_ERR_NO_FILE;
 		return -1;
 	}
 	/* Delete file descriptor */
@@ -309,7 +360,7 @@ ufs_delete(const char *filename)
 			return 0;
 		}
 	}
-	ufs_errno = UFS_ERR_NO_FILE;
+	ufs_error_code = UFS_ERR_NO_FILE;
 	return -1;
 }
 
@@ -318,7 +369,7 @@ ufs_resize(int fd, size_t new_size)
 {
 	/* Check whether a file descriptor #fd exists */
 	if(fd < 0 || fd > file_descriptor_capacity - 1 || file_descriptors[fd] == NULL) {
-		ufs_errno = UFS_ERR_NO_FILE;
+		ufs_error_code = UFS_ERR_NO_FILE;
 		return -1;
 	}
 	struct file *file_to_resize = file_descriptors[fd]->file;
@@ -326,7 +377,7 @@ ufs_resize(int fd, size_t new_size)
 	if(new_size > (file_to_resize->occupied / BLOCK_SIZE + 1)*BLOCK_SIZE) {
 		/* Check whether new_size is less than MAX_FILE_SIZE */ 
 		if(new_size > MAX_FILE_SIZE) {
-			ufs_errno = UFS_ERR_NO_MEM;
+			ufs_error_code = UFS_ERR_NO_MEM;
 			return -1;
 		}
 		/* Create new block */
@@ -358,7 +409,7 @@ ufs_resize(int fd, size_t new_size)
 		while(refs > 0) {
 			if(file_descriptors[i]->file == file_to_resize) {
 				if(file_descriptors[i]->pos > new_size) {
-					file_descriptors[i]->block_to_read = cur_block;
+					file_descriptors[i]->block_to_act = cur_block;
 					file_descriptors[i]->pos = new_size;
 				}
 				refs --;
