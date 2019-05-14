@@ -2,6 +2,7 @@
 #include <stddef.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 
 enum {
 	BLOCK_SIZE = 512,
@@ -50,7 +51,7 @@ static struct file *file_list = NULL;
 
 struct filedesc {
 	struct file *file;
-	struct block *block_to_read;
+	struct block *block_to_act;
 	/* The position of the filedescriptor in the file*/
 	int pos;
 	/* A regime of the work */
@@ -117,7 +118,7 @@ ufs_open(const char *filename, int flags)
 			new_file->block_list->occupied = 0;
 			new_file->last_block = new_file->block_list;
 			new_file->name = (const char *)malloc(sizeof(char)*strlen(filename));
-			strcpy((char*)new_file->name, filename);
+			sprintf((char*)new_file->name, "%s", filename);
 			new_file->next = NULL;
 			new_file->refs = 1;
 			new_file->occupied = 0;
