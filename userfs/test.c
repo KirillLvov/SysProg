@@ -217,8 +217,8 @@ test_max_file_size(void)
 		unit_fail_if(rc != buf_size);
 		unit_fail_if(memcmp(buf2, buf, buf_size) != 0);
 	}
-	//free(buf2);
-	//free(buf);
+	free(buf2);
+	free(buf);
 	unit_msg("read works");
 	unit_fail_if(ufs_close(fd) == -1);
 	unit_fail_if(ufs_delete("file") == -1);
