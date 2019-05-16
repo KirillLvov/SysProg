@@ -78,6 +78,11 @@ ufs_errno()
 int
 ufs_open(const char *filename, int flags)
 {
+	if(file_descriptors == NULL) {
+		file_descriptors = (struct filedesc **)malloc(sizeof(struct filedesc *)*file_descriptor_capacity);
+		for(int i=0; i<file_descriptor_capacity; i++)
+			file_descriptors[i] = NULL;
+	}
 	/* Return error if there are too many file descriptors */
 	if(file_descriptor_count == file_descriptor_capacity) {
 		ufs_error_code = UFS_ERR_NO_FILE;
@@ -105,6 +110,7 @@ ufs_open(const char *filename, int flags)
 	}
 	/* Create new file */
 	if(!file_ok) {
+		//printf("%d\t%d\n", flags, UFS_CREATE);
 		if(!(flags & UFS_CREATE)) {
 			ufs_error_code = UFS_ERR_NO_FILE;
 			return -1;
@@ -148,14 +154,17 @@ ufs_open(const char *filename, int flags)
 ssize_t
 ufs_write(int fd, const char *buf, size_t size)
 {
+//	printf("Begin write fd%d\n", fd);
 	/* Check whether a file descriptor #fd exists */
 	if(fd < 0 || fd > file_descriptor_capacity - 1 || file_descriptors[fd] == NULL) {
 		ufs_error_code = UFS_ERR_NO_FILE;
+//		printf("Error fd\n");
 		return -1;
 	}
 	/* Check permissions of the work */
 	if(file_descriptors[fd]->regime & UFS_READ_ONLY) {
 		ufs_error_code = UFS_ERR_NO_PERMISSION;
+//		printf("Error rights\n");
 		return -1;
 	}
 	/* Extract file from file descriptor */
@@ -163,6 +172,7 @@ ufs_write(int fd, const char *buf, size_t size)
 	/* Check whether the file is short enought to write 'buf' */
 	if(MAX_FILE_SIZE - file_descriptors[fd]->pos < size) {
 		ufs_error_code = UFS_ERR_NO_MEM;
+//		printf("Error size\n");
 		return -1;
 	}
 	/* The number of bytes left to write */
@@ -173,8 +183,10 @@ ufs_write(int fd, const char *buf, size_t size)
 		cur_block->memory = (char *)malloc(sizeof(char)*BLOCK_SIZE);
 	/* Write the 'buf' totally if there is enought memory in the last block */
 	int offset = file_descriptors[fd]->pos % BLOCK_SIZE;
+//	printf("Offset %d\n",offset);
 	if(BLOCK_SIZE - offset >= left_to_write) {
 		sprintf(cur_block->memory + offset, "%s", buf);
+//		printf("Print into 1 block: %s\n", buf);
 		if(cur_block->occupied < offset + left_to_write) {
 			file_to_write->occupied += offset + left_to_write - cur_block->occupied;
 			cur_block->occupied = offset + left_to_write;
@@ -260,35 +272,42 @@ ufs_write(int fd, const char *buf, size_t size)
 ssize_t
 ufs_read(int fd, char *buf, size_t size)
 {
+//	printf("Begin read fd%d\n", fd);
 	/* Check whether a file descriptor #fd exists */
 	if(fd < 0 || fd > file_descriptor_capacity - 1 || file_descriptors[fd] == NULL) {
 		ufs_error_code = UFS_ERR_NO_FILE;
+//		printf("Error fd\n");
 		return -1;
 	}
 	/* Check permissions of the work */
 	if(file_descriptors[fd]->regime & UFS_WRITE_ONLY) {
 		ufs_error_code = UFS_ERR_NO_PERMISSION;
+//		printf("Error rights\n");
 		return -1;
 	}
 	/* The number of bytes left to read */
 	int left_to_read;
 	int available_to_read = file_descriptors[fd]->file->occupied - file_descriptors[fd]->pos;
+//	printf("Available to read: %d\n", available_to_read);
 	if(available_to_read < size)
 		left_to_read = available_to_read;
 	else
 		left_to_read = size;
+//	printf("Left to read: %d\n", left_to_read);
 	/* Choose the block to read */
 	struct block *cur_block = file_descriptors[fd]->block_to_act;
 	int offset = file_descriptors[fd]->pos % BLOCK_SIZE;
+//	printf("Offset %d\n", offset);
 	/* Check whether the file is not empty */
 	if(cur_block->memory == NULL)
 		return 0;
 	/* Read only a part of the block if the buf's size <= BLOCK_SIZE - offset */
 	if(left_to_read <= BLOCK_SIZE - offset) {
-		sprintf(buf, "%.*s", cur_block->occupied - offset, cur_block->memory + offset);
-		left_to_read = 0;
+		sprintf(buf, "%.*s", left_to_read, cur_block->memory + offset);
+//		printf("Read from 1 block: %s\n", buf);
 		if(left_to_read == BLOCK_SIZE - offset)
 			cur_block = cur_block->next;
+		left_to_read = 0;
 	}
 	else {
 		/* Read the last part of the block */
