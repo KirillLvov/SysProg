@@ -183,7 +183,7 @@ ufs_write(int fd, const char *buf, size_t size)
 	/* Write the 'buf' totally if there is enought memory in the last block */
 	int offset = file_descriptors[fd]->pos % BLOCK_SIZE;
 	if(BLOCK_SIZE - offset >= left_to_write) {
-		memcpy(cur_block->memory + offset, buf, strlen(buf)+1);
+		memcpy(cur_block->memory + offset, buf, size);
 		if(cur_block->occupied < offset + left_to_write) {
 			file_to_write->occupied += offset + left_to_write - cur_block->occupied;
 			cur_block->occupied = offset + left_to_write;
