@@ -125,7 +125,7 @@ ufs_open(const char *filename, int flags)
 			new_file->block_list->occupied = 0;
 			new_file->last_block = new_file->block_list;
 			new_file->name = (const char *)malloc(sizeof(char)*strlen(filename));
-			sprintf((char*)new_file->name, "%s", filename);
+			memcpy((char*)new_file->name, filename, strlen(filename)+1);
 			new_file->next = NULL;
 			new_file->refs = 1;
 			new_file->occupied = 0;
@@ -151,6 +151,7 @@ ufs_open(const char *filename, int flags)
 			file_descriptor_count ++;
 			return i;
 		}
+	return -1;
 }
 
 ssize_t
@@ -182,7 +183,7 @@ ufs_write(int fd, const char *buf, size_t size)
 	/* Write the 'buf' totally if there is enought memory in the last block */
 	int offset = file_descriptors[fd]->pos % BLOCK_SIZE;
 	if(BLOCK_SIZE - offset >= left_to_write) {
-		sprintf(cur_block->memory + offset, "%s", buf);
+		memcpy(cur_block->memory + offset, buf, strlen(buf)+1);
 		if(cur_block->occupied < offset + left_to_write) {
 			file_to_write->occupied += offset + left_to_write - cur_block->occupied;
 			cur_block->occupied = offset + left_to_write;
@@ -199,13 +200,10 @@ ufs_write(int fd, const char *buf, size_t size)
 			file_to_write->last_block = cur_block;
 		}
 		left_to_write = 0;
-		file_descriptors[fd]->block_to_act = cur_block;
-		file_descriptors[fd]->pos += size;
-		return size;
 	}
 	else {
 		/* Write to the current block until it becomes full */
-		sprintf(cur_block->memory + offset, "%.*s", BLOCK_SIZE - offset, buf + size - left_to_write);
+		memcpy(cur_block->memory + offset, buf + size - left_to_write, BLOCK_SIZE - offset);
 		left_to_write -= BLOCK_SIZE - offset;
 		if(cur_block->occupied < BLOCK_SIZE) {
 			file_to_write->occupied += BLOCK_SIZE - cur_block->occupied;
@@ -215,7 +213,7 @@ ufs_write(int fd, const char *buf, size_t size)
 		while(cur_block->next != NULL) {
 			cur_block = cur_block->next;
 			if(left_to_write <= BLOCK_SIZE) {
-				sprintf(cur_block->memory, "%.*s", left_to_write, buf + size - left_to_write);
+				memcpy(cur_block->memory, buf + size - left_to_write, left_to_write);
 				if(cur_block->occupied < left_to_write) {
 					file_to_write->occupied += left_to_write - cur_block->occupied;
 					cur_block->occupied = left_to_write;
@@ -224,7 +222,7 @@ ufs_write(int fd, const char *buf, size_t size)
 				file_descriptors[fd]->pos += size;
 				return size;
 			}
-			sprintf(cur_block->memory, "%.*s", BLOCK_SIZE, buf + size - left_to_write);
+			memcpy(cur_block->memory, buf + size - left_to_write, BLOCK_SIZE);
 			left_to_write -= BLOCK_SIZE;
 			if(cur_block->occupied < BLOCK_SIZE) {
 				file_to_write->occupied += BLOCK_SIZE - cur_block->occupied;
@@ -235,7 +233,7 @@ ufs_write(int fd, const char *buf, size_t size)
 		while(left_to_write >= BLOCK_SIZE) {
 			struct block *new_block = (struct block *)malloc(sizeof(struct block));
 			new_block->memory = (char *)malloc(sizeof(char)*BLOCK_SIZE);
-			sprintf(new_block->memory, "%.*s", BLOCK_SIZE, buf + size - left_to_write);
+			memcpy(new_block->memory, buf + size - left_to_write, BLOCK_SIZE);
 			new_block->occupied = BLOCK_SIZE;
 			new_block->next = NULL;
 			new_block->prev = cur_block;
@@ -249,7 +247,7 @@ ufs_write(int fd, const char *buf, size_t size)
 		if(left_to_write >= 0) {
 			struct block *new_block = (struct block *)malloc(sizeof(struct block));
 			new_block->memory = (char *)malloc(sizeof(char)*BLOCK_SIZE);
-			sprintf(new_block->memory, "%.*s", left_to_write, buf + size - left_to_write);
+			memcpy(new_block->memory, buf + size - left_to_write, left_to_write);
 			new_block->occupied = left_to_write;
 			new_block->next = NULL;
 			new_block->prev = cur_block;
@@ -259,10 +257,10 @@ ufs_write(int fd, const char *buf, size_t size)
 			file_to_write->occupied += left_to_write;
 			left_to_write = 0;
 		}
-		file_descriptors[fd]->block_to_act = cur_block;
-		file_descriptors[fd]->pos += size;
-		return size;
 	}
+	file_descriptors[fd]->block_to_act = cur_block;
+	file_descriptors[fd]->pos += size;
+	return size;
 }
 
 ssize_t
@@ -293,25 +291,25 @@ ufs_read(int fd, char *buf, size_t size)
 		return 0;
 	/* Read only a part of the block if the buf's size <= BLOCK_SIZE - offset */
 	if(left_to_read <= BLOCK_SIZE - offset) {
-		sprintf(buf, "%.*s", left_to_read, cur_block->memory + offset);
+		memcpy(buf, cur_block->memory + offset, left_to_read);
 		if(left_to_read == BLOCK_SIZE - offset)
 			cur_block = cur_block->next;
 		left_to_read = 0;
 	}
 	else {
 		/* Read the last part of the block */
-		sprintf(buf, "%s", cur_block->memory + offset);
+		memcpy(buf, cur_block->memory + offset, BLOCK_SIZE - offset);
 		left_to_read -= cur_block->occupied - offset;
 		cur_block = cur_block->next;
 		while(cur_block != NULL) {
 			/* Read left data as a part of the block */
 			if(left_to_read <= BLOCK_SIZE) {
-				sprintf(buf + size - left_to_read, "%.*s", left_to_read, cur_block->memory);
+				memcpy(buf + size - left_to_read, cur_block->memory, left_to_read);
 				left_to_read = 0;
 				return size;
 			}
 			/* Read whole block */
-			sprintf(buf + size - left_to_read, "%.*s", BLOCK_SIZE, cur_block->memory);
+			memcpy(buf + size - left_to_read, cur_block->memory, BLOCK_SIZE);
 			left_to_read -= cur_block->occupied;
 			cur_block = cur_block->next;
 		}
@@ -341,7 +339,8 @@ ufs_close(int fd)
 	if(file->refs == 0 && file->deleted == 1) {
 		struct block *curr = file->block_list->next;
 		while(curr != NULL) {
-			struct block *tmp = curr->next;
+			struct block *tmp = curr;
+			curr = curr->next;
 			free(tmp->memory);
 			free(tmp);
 		}
